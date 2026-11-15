@@ -89,7 +89,9 @@ const SIDES = [-1, -1, 1, 1];
 const EAR_SENSOR = [true, false, false, true];
 
 // Pure tones per ear. MONO plays both tones in both ears, each at 1/√2, so every sound is equally loud.
-const CARRIER = 400, BEAT_HZ = 6;
+// 97/103 Hz, near the Gateway tapes' carriers: neither tone is 6 Hz from the 100 Hz harmonic of
+// the 50 Hz mains, so mains mixing with a tone gives 3 Hz, never the beat frequency.
+const CARRIER = 97, BEAT_HZ = 6;
 const SOUNDS = {
   beat: { left: [CARRIER], right: [CARRIER + BEAT_HZ] },
   control: { left: [CARRIER + BEAT_HZ / 2], right: [CARRIER + BEAT_HZ / 2] },
@@ -112,17 +114,18 @@ const TESTS = {
       { marker: 'eyes_closed', s: 60, beeps: 1 },
     ],
   },
-  // Eyes closed throughout. MONO checks that a response can be detected at all. Beat, control,
-  // control, beat gives both the same average position, so steady drowsiness cancels out.
+  // Eyes closed throughout. MONO checks that a response can be detected at all. Control, beat,
+  // control gives both the same average position, so steady drowsiness cancels out; one 10 min
+  // beat leaves room for a slow build-up, and anything lingering after MONO or BEAT lands in
+  // CONTROL, where it can only hide a result.
   beat: {
     label: 'Beat test (24 min)',
     steps: [
       { marker: 'silence', s: 60, beeps: 1 },
       { marker: 'mono', s: 120, sound: 'mono' },
-      { marker: 'beat', s: 300, sound: 'beat' },
       { marker: 'control', s: 300, sound: 'control' },
+      { marker: 'beat', s: 600, sound: 'beat' },
       { marker: 'control', s: 300, sound: 'control' },
-      { marker: 'beat', s: 300, sound: 'beat' },
       { marker: 'silence', s: 60 },
     ],
   },
