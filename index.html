@@ -136,6 +136,7 @@ const $ = id => document.getElementById(id);
 const chans = EEG.map(([name]) => ({ name, buf: new Float32Array(BUF), filled: 0 }));
 let device = null, control = null, session = null, wakeLock = null;
 let generation = 0;  // listeners from an earlier connection ignore their events
+let leaving = false, reconnecting = false;  // leaving: the user pressed Disconnect
 let outbox = { eeg: [], events: [] }, flushing = false, serverOk = null;
 // Every half-second batch goes into IndexedDB on the phone; when the page was loaded from the
 // PC logger (http://localhost over USB), the batch is also sent there.
@@ -698,28 +699,16 @@ async function connect() {
       filters: [{ services: [SERVICE] }, { namePrefix: 'Muse' }],
       optionalServices: [SERVICE],
     });
+    device.ongattserverdisconnected = onDisconnected;
+    leaving = false;
     setStatus(`Connecting to ${device.name}…`);
-    const gen = ++generation;
-    device.addEventListener('gattserverdisconnected', () => gen === generation && onDisconnected());
-    const service = await (await device.gatt.connect()).getPrimaryService(SERVICE);
     session = stamp();
     quality = {};
     savedChunks = 0;
     for (const c of chans) Object.assign(c, { pos: 0, filled: 0, lastIndex: null, packets: 0, counted: 0, lost: 0, rate: 0, badSince: null });
     rateAt = performance.now();
     logEvent(`connected ${device.name}`);
-
-    control = await service.getCharacteristic(CONTROL);
-    control.addEventListener('characteristicvaluechanged', e => gen === generation && onControl(e));
-    await control.startNotifications();
-    for (const [ch, [, id]] of EEG.entries()) {
-      const char = await service.getCharacteristic(id);
-      char.addEventListener('characteristicvaluechanged', e => gen === generation && onEEG(chans[ch], e));
-      await char.startNotifications();
-    }
-    // muse-js's start sequence: halt, preset 21 (4 EEG channels, no aux), status, resume.
-    for (const cmd of ['h', 'p21', 's', 'd']) await send(cmd);
-    await send('v1');  // the reply carries the firmware version
+    await startStream();
     setConnected(true);
     await keepAwake();
     setStatus(`Streaming from ${device.name}, session ${session}.`);
@@ -729,14 +718,63 @@ async function connect() {
   }
 }
 
+// Connects to the headband, subscribes to the control and EEG characteristics and starts the stream.
+async function startStream() {
+  const gen = ++generation;
+  const service = await (await device.gatt.connect()).getPrimaryService(SERVICE);
+  control = await service.getCharacteristic(CONTROL);
+  control.addEventListener('characteristicvaluechanged', e => gen === generation && onControl(e));
+  await control.startNotifications();
+  for (const [ch, [, id]] of EEG.entries()) {
+    const char = await service.getCharacteristic(id);
+    char.addEventListener('characteristicvaluechanged', e => gen === generation && onEEG(chans[ch], e));
+    await char.startNotifications();
+  }
+  // muse-js's start sequence: halt, preset 21 (4 EEG channels, no aux), status, resume.
+  for (const cmd of ['h', 'p21', 's', 'd']) await send(cmd);
+  await send('v1');  // the reply carries the firmware version
+}
+
+// After an unexpected drop the test and its sound keep running while this wins the link back;
+// the analysis skips the gap. Three falling notes mean lost, three rising notes mean back.
+async function reconnect() {
+  if (reconnecting) return;
+  reconnecting = true;
+  chime([392, 330, 262], 0, 0);
+  for (let attempt = 1; !leaving && !device.gatt.connected; attempt++) {
+    for (const c of chans) c.lastIndex = null;  // the packet index may restart
+    try {
+      await startStream();
+      if (leaving) device.gatt.disconnect();  // Disconnect was pressed during the attempt
+      logEvent(`reconnected after ${attempt} attempt(s)`);
+      chime([262, 330, 392], 0, 0);
+      setStatus(`Streaming from ${device.name}, session ${session} (reconnected).`);
+    } catch (err) {
+      logEvent(`reconnect attempt ${attempt} failed: ${err.message}`);
+      await new Promise(r => setTimeout(r, 2000));
+    }
+  }
+  reconnecting = false;
+}
+
 async function disconnect() {
+  leaving = true;
+  if (!device.gatt.connected) {
+    onDisconnected();  // mid-reconnect: there is no link left to close
+    return;
+  }
   try { await send('h'); } catch (err) { /* already gone */ }
   device.gatt.disconnect();
 }
 
 function onDisconnected() {
   logEvent('disconnected');
-  setStatus(`Disconnected. Session ${session} is on the PC.`);
+  if (!leaving) {
+    setStatus(`Connection lost at ${new Date().toLocaleTimeString()}, reconnecting…`);
+    reconnect();
+    return;
+  }
+  setStatus(`Disconnected. Session ${session} is saved on the phone.`);
   stopTest();
   setConnected(false);
   wakeLock?.release().catch(() => {});
