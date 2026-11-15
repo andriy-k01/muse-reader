@@ -41,7 +41,7 @@
 <div>
   <button id="earCheck" class="secondary">Ear check</button>
   <button class="secondary test" data-test="alpha" disabled>Alpha test (4 min)</button>
-  <button class="secondary test" data-test="beat" disabled>Beat test (24 min)</button>
+  <button class="secondary test" data-test="beat" disabled>Beat test (26 min)</button>
 </div>
 <div>
   <button class="secondary marker" data-marker="eyes_open" disabled>Eyes open</button>
@@ -114,18 +114,21 @@ const TESTS = {
       { marker: 'eyes_closed', s: 60, beeps: 1 },
     ],
   },
-  // Eyes closed throughout. MONO checks that a response can be detected at all. Control, beat,
-  // control gives both the same average position, so steady drowsiness cancels out; one 10 min
-  // beat leaves room for a slow build-up, and anything lingering after MONO or BEAT lands in
-  // CONTROL, where it can only hide a result.
+  // Eyes closed throughout. MONO checks that a response can be detected at all: 6 min in all,
+  // enough to catch a response the size of the first test's about 8 times in 10. The order is
+  // symmetric, so every sound has the same average position and steady drowsiness cancels out;
+  // MONO at both ends also shows whether the setup still detects a response at the end. One
+  // 10 min beat leaves room for a slow build-up, and anything lingering after MONO or BEAT lands
+  // in CONTROL, where it can only hide a result.
   beat: {
-    label: 'Beat test (24 min)',
+    label: 'Beat test (26 min)',
     steps: [
       { marker: 'silence', s: 60, beeps: 1 },
-      { marker: 'mono', s: 120, sound: 'mono' },
-      { marker: 'control', s: 300, sound: 'control' },
+      { marker: 'mono', s: 180, sound: 'mono' },
+      { marker: 'control', s: 240, sound: 'control' },
       { marker: 'beat', s: 600, sound: 'beat' },
-      { marker: 'control', s: 300, sound: 'control' },
+      { marker: 'control', s: 240, sound: 'control' },
+      { marker: 'mono', s: 180, sound: 'mono' },
       { marker: 'silence', s: 60 },
     ],
   },
