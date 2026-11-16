@@ -42,6 +42,7 @@
   <button id="earCheck" class="secondary">Ear check</button>
   <button class="secondary test" data-test="alpha" disabled>Alpha test (4 min)</button>
   <button class="secondary test" data-test="beat" disabled>Beat test (26 min)</button>
+  <button class="secondary test" data-test="swap" disabled>Swap test (34 min)</button>
 </div>
 <div>
   <button class="secondary marker" data-marker="eyes_open" disabled>Eyes open</button>
@@ -92,16 +93,25 @@ const EAR_SENSOR = [true, false, false, true];
 // 97/103 Hz, near the Gateway tapes' carriers: neither tone is 6 Hz from the 100 Hz harmonic of
 // the 50 Hz mains, so mains mixing with a tone gives 3 Hz, never the beat frequency.
 const CARRIER = 97, BEAT_HZ = 6;
+// The swap test's second beat: 3.87 Hz on 125/128.87 Hz. Up to 4th order, no mixing of these tones
+// with each other or with the mains lands within 0.5 Hz of 6 Hz, and none of the 6 Hz sound's lands
+// near 3.87 Hz, so each sound is a clean control for the other's frequency.
+const CARRIER2 = 125, BEAT2_HZ = 3.87;
 const SOUNDS = {
   beat: { left: [CARRIER], right: [CARRIER + BEAT_HZ] },
   control: { left: [CARRIER + BEAT_HZ / 2], right: [CARRIER + BEAT_HZ / 2] },
   mono: { left: [CARRIER, CARRIER + BEAT_HZ], right: [CARRIER, CARRIER + BEAT_HZ] },
+  beat2: { left: [CARRIER2], right: [CARRIER2 + BEAT2_HZ] },
+  mono2: { left: [CARRIER2, CARRIER2 + BEAT2_HZ], right: [CARRIER2, CARRIER2 + BEAT2_HZ] },
   left: { left: [CARRIER + BEAT_HZ / 2], right: [] },
   right: { left: [], right: [CARRIER + BEAT_HZ / 2] },
 };
 const TONE_GAIN = 0.2;
 const FADE_S = 2;  // crossfade between sounds: a click would itself evoke a brain response
-const EAR_CHECK = [['left', 'LEFT ear only', 2.5], ['right', 'RIGHT ear only', 2.5], ['beat', 'BEAT sample, a slow wobble', 8]];
+const EAR_CHECK = [
+  ['left', 'LEFT ear only', 2.5], ['right', 'RIGHT ear only', 2.5],
+  ['beat', 'BEAT sample, a slow wobble', 8], ['beat2', 'BEAT 2 sample, a slower wobble', 8],
+];
 
 // A test is a list of timed steps. Beeps: one means close your eyes, two mean open them, three mean done.
 const TESTS = {
@@ -132,10 +142,33 @@ const TESTS = {
       { marker: 'silence', s: 60 },
     ],
   },
+  // Eyes closed throughout. Two beat frequencies take turns, and each sound is the control for the
+  // other's frequency: drowsiness, chance or a stray line can't make a peak follow the sound from
+  // 6 Hz to 3.87 Hz and back. The 6 Hz half keeps the beat test's sensitivity (28 pieces of BEAT,
+  // 29 of control, MONO 6 min); BEAT 2 gets the one unbroken 10 min, like the Gateway tapes' long
+  // 3.8 Hz stretches. The order is a palindrome, so every sound has the same average position, and
+  // anything lingering after a sound lands in the other frequency's blocks, where it can only hide
+  // a result. The background at 3.87 Hz is about 3 times that at 6 Hz, so MONO 2 only detects a
+  // response about 1.7 times the size of MONO's (8 times in 10); a same-size one would need 23-50 min.
+  swap: {
+    label: 'Swap test (34 min)',
+    steps: [
+      { marker: 'silence', s: 60, beeps: 1 },
+      { marker: 'mono', s: 180, sound: 'mono' },
+      { marker: 'mono2', s: 180, sound: 'mono2' },
+      { marker: 'beat', s: 300, sound: 'beat' },
+      { marker: 'beat2', s: 600, sound: 'beat2' },
+      { marker: 'beat', s: 300, sound: 'beat' },
+      { marker: 'mono2', s: 180, sound: 'mono2' },
+      { marker: 'mono', s: 180, sound: 'mono' },
+      { marker: 'silence', s: 60 },
+    ],
+  },
 };
 const LABELS = {
   eyes_open: 'Eyes OPEN', eyes_closed: 'Eyes CLOSED', silence: 'Silence',
   mono: `MONO: ${BEAT_HZ} Hz wobble`, beat: `BEAT: ${BEAT_HZ} Hz binaural`, control: 'CONTROL: no beat',
+  mono2: `MONO 2: ${BEAT2_HZ} Hz wobble`, beat2: `BEAT 2: ${BEAT2_HZ} Hz binaural`,
 };
 
 const $ = id => document.getElementById(id);
