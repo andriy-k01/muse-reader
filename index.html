@@ -90,13 +90,14 @@ const SIDES = [-1, -1, 1, 1];
 const EAR_SENSOR = [true, false, false, true];
 
 // Pure tones per ear. MONO plays both tones in both ears, each at 1/√2, so every sound is equally loud.
-// 97/103 Hz, near the Gateway tapes' carriers: neither tone is 6 Hz from the 100 Hz harmonic of
-// the 50 Hz mains, so mains mixing with a tone gives 3 Hz, never the beat frequency.
-const CARRIER = 97, BEAT_HZ = 6;
-// The swap test's second beat: 3.87 Hz on 125/128.87 Hz. Up to 4th order, no mixing of these tones
-// with each other or with the mains lands within 0.5 Hz of 6 Hz, and none of the 6 Hz sound's lands
-// near 3.87 Hz, so each sound is a clean control for the other's frequency.
-const CARRIER2 = 125, BEAT2_HZ = 3.87;
+// Carriers below 130 Hz, like most of the Gateway tapes' beat time. Counting each mains harmonic
+// (50-300 Hz) as a source, no 3rd-order mixing of a sound's tones with the mains comes within 1 Hz
+// of the band analysed around 6 or 15.2 Hz (±0.5 Hz), even with the mains 0.1 Hz off. Nearer
+// 100 Hz that fails: on 97/103 Hz, 2 × 103 − 200 = 6 Hz.
+const CARRIER = 112.5, BEAT_HZ = 6;
+// The swap test's second beat: 15.2 Hz, from the tapes' beta stages. With eyes closed the background
+// there is 5-20 times lower than at 6 Hz. 16 Hz, the tapes' usual beta, sits on the headband's radio line.
+const CARRIER2 = 111, BEAT2_HZ = 15.2;
 const SOUNDS = {
   beat: { left: [CARRIER], right: [CARRIER + BEAT_HZ] },
   control: { left: [CARRIER + BEAT_HZ / 2], right: [CARRIER + BEAT_HZ / 2] },
@@ -110,7 +111,7 @@ const TONE_GAIN = 0.2;
 const FADE_S = 2;  // crossfade between sounds: a click would itself evoke a brain response
 const EAR_CHECK = [
   ['left', 'LEFT ear only', 2.5], ['right', 'RIGHT ear only', 2.5],
-  ['beat', 'BEAT sample, a slow wobble', 8], ['beat2', 'BEAT 2 sample, a slower wobble', 8],
+  ['beat', 'BEAT sample, a slow wobble', 8], ['beat2', 'BEAT 2 sample, a fast flutter', 8],
 ];
 
 // A test is a list of timed steps. Beeps: one means close your eyes, two mean open them, three mean done.
@@ -143,13 +144,13 @@ const TESTS = {
     ],
   },
   // Eyes closed throughout. Two beat frequencies take turns, and each sound is the control for the
-  // other's frequency: drowsiness, chance or a stray line can't make a peak follow the sound from
-  // 6 Hz to 3.87 Hz and back. The 6 Hz half keeps the beat test's sensitivity (28 pieces of BEAT,
-  // 29 of control, MONO 6 min); BEAT 2 gets the one unbroken 10 min, like the Gateway tapes' long
-  // 3.8 Hz stretches. The order is a palindrome, so every sound has the same average position, and
-  // anything lingering after a sound lands in the other frequency's blocks, where it can only hide
-  // a result. The background at 3.87 Hz is about 3 times that at 6 Hz, so MONO 2 only detects a
-  // response about 1.7 times the size of MONO's (8 times in 10); a same-size one would need 23-50 min.
+  // other's frequency: drowsiness, chance or the brain's own beta can't make a peak follow the sound
+  // from 6 Hz to 15.2 Hz and back. The 6 Hz half keeps the beat test's sensitivity (28 pieces of BEAT,
+  // 29 of control, MONO 6 min); the beat test already has an unbroken 10 min of 6 Hz, so here BEAT 2
+  // gets it. The order is a palindrome, so every sound has the same average position, and anything
+  // lingering after a sound lands in the other frequency's blocks, where it can only hide a result.
+  // With the low background at 15.2 Hz, MONO 2 detects a response about a third the size of MONO's
+  // 8 times in 10.
   swap: {
     label: 'Swap test (34 min)',
     steps: [
