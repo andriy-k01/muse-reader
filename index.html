@@ -81,6 +81,11 @@ const SERVICE = 0xfe8d;
 const uuid = n => `273e00${n}-4c4d-454d-96be-f03bac821358`;
 const CONTROL = uuid('01');
 const EEG = [['TP9', uuid('03')], ['AF7', uuid('04')], ['AF8', uuid('05')], ['TP10', uuid('06')]];
+// The body sensors, switched on by preset p50 (muse-js's PPG preset; EEG stays 4 channels at 256 Hz).
+// Heart (PPG): 64 Hz, 6 unsigned 24-bit raw samples per packet, one characteristic per light.
+// Motion: 52 Hz, 3 samples of x, y, z (signed 16-bit) per packet; accelerometer in g, gyroscope in °/s.
+const PPG = [['ppg_ambient', uuid('0f')], ['ppg_ir', uuid('10')], ['ppg_red', uuid('11')]];
+const IMU = [['acc', uuid('0a'), 0.0000610352], ['gyro', uuid('09'), 0.0074768]];
 const PLACES = ['left ear', 'left forehead', 'right forehead', 'right ear'];
 const FS = 256;
 const BUF = 1024;  // 4 s kept for the traces
@@ -157,7 +162,7 @@ const chans = EEG.map(([name]) => ({ name, buf: new Float32Array(BUF), filled: 0
 let device = null, control = null, session = null, wakeLock = null;
 let generation = 0;  // listeners from an earlier connection ignore their events
 let leaving = false, reconnecting = false;  // leaving: the user pressed Disconnect
-let outbox = { eeg: [], events: [] }, flushing = false, serverOk = null;
+let outbox = { eeg: [], events: [], body: [] }, flushing = false, serverOk = null;
 // Every half-second batch goes into IndexedDB on the phone; when the page was loaded from the
 // PC logger (http://localhost over USB), the batch is also sent there.
 const PC_MODE = location.hostname === 'localhost';
@@ -208,6 +213,20 @@ function decodeEEG(dv) {
     samples[2 * k + 1] = 0.48828125 * ((((b1 & 0xf) << 8) | b2) - 2048);
   }
   return samples;
+}
+
+function onPPG(name, e) {
+  const dv = e.target.value;
+  const samples = [];
+  for (let k = 0; k < 6; k++) samples.push((dv.getUint8(2 + 3 * k) << 16) | (dv.getUint8(3 + 3 * k) << 8) | dv.getUint8(4 + 3 * k));
+  outbox.body.push([Date.now(), name, dv.getUint16(0), ...samples]);
+}
+
+function onIMU(name, scale, e) {
+  const dv = e.target.value;
+  const values = [];
+  for (let k = 0; k < 9; k++) values.push(+(scale * dv.getInt16(2 + 2 * k)).toFixed(5));
+  outbox.body.push([Date.now(), name, dv.getUint16(0), ...values]);
 }
 
 function onControl(e) {
@@ -713,19 +732,22 @@ function deleteSession(name) {
   });
 }
 
-// The same two CSV files the PC logger writes, so the analysis scripts read either.
+// The same three CSV files the PC logger writes, so the analysis scripts read either.
 async function sessionFiles(name) {
   const chunks = await request(sessionIndex('readonly').getAll(name));
   const cell = v => typeof v === 'string' && /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
   const eeg = ['t_ms,channel,index,' + Array.from({ length: 12 }, (_, i) => `s${i}`).join(',')];
   const events = ['t_ms,event'];
+  const body = ['t_ms,sensor,index,' + Array.from({ length: 9 }, (_, i) => `v${i}`).join(',')];
   for (const c of chunks) {
     for (const r of c.eeg) eeg.push(r.join(','));
     for (const r of c.events) events.push(r.map(cell).join(','));
+    for (const r of c.body ?? []) body.push(r.join(','));  // sessions before 2026-11-21 have none
   }
   return [
     new File([eeg.join('\n') + '\n'], `${name}_eeg.csv`, { type: 'text/csv' }),
     new File([events.join('\n') + '\n'], `${name}_events.csv`, { type: 'text/csv' }),
+    ...(body.length > 1 ? [new File([body.join('\n') + '\n'], `${name}_body.csv`, { type: 'text/csv' })] : []),
   ];
 }
 
@@ -780,9 +802,9 @@ async function showRecordings() {
 async function flush() {
   if (flushing || !session) return;
   flushing = true;
-  if (outbox.eeg.length || outbox.events.length) {
+  if (outbox.eeg.length || outbox.events.length || outbox.body.length) {
     const batch = { session, ...outbox };
-    outbox = { eeg: [], events: [] };
+    outbox = { eeg: [], events: [], body: [] };
     try {
       await saveChunk(batch);
       savedChunks++;
@@ -790,7 +812,7 @@ async function flush() {
       if (PC_MODE) pcQueue.push(batch);
     } catch (err) {
       // Keep the data and retry on the next tick.
-      outbox = { eeg: batch.eeg.concat(outbox.eeg), events: batch.events.concat(outbox.events) };
+      outbox = { eeg: batch.eeg.concat(outbox.eeg), events: batch.events.concat(outbox.events), body: batch.body.concat(outbox.body) };
       localError = err.message;
     }
   }
@@ -872,8 +894,18 @@ async function startStream() {
     char.addEventListener('characteristicvaluechanged', e => gen === generation && onEEG(chans[ch], e));
     await char.startNotifications();
   }
-  // muse-js's start sequence: halt, preset 21 (4 EEG channels, no aux), status, resume.
-  for (const cmd of ['h', 'p21', 's', 'd']) await send(cmd);
+  for (const [name, id] of PPG) {
+    const char = await service.getCharacteristic(id);
+    char.addEventListener('characteristicvaluechanged', e => gen === generation && onPPG(name, e));
+    await char.startNotifications();
+  }
+  for (const [name, id, scale] of IMU) {
+    const char = await service.getCharacteristic(id);
+    char.addEventListener('characteristicvaluechanged', e => gen === generation && onIMU(name, scale, e));
+    await char.startNotifications();
+  }
+  // muse-js's start sequence with PPG on: halt, preset 50 (4 EEG channels, heart, motion), status, resume.
+  for (const cmd of ['h', 'p50', 's', 'd']) await send(cmd);
   await send('v1');  // the reply carries the firmware version
 }
 
