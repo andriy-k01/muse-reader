@@ -33,6 +33,13 @@
   .rec { display: flex; flex-wrap: wrap; gap: 4px; padding: 6px 0; border-bottom: 1px solid #333; }
   .rec span { flex: 1 1 100%; color: #ccc; font-size: 14px; }
   button.small { margin: 0; padding: 8px 12px; font-size: 15px; }
+  select { font-size: 18px; padding: 10px; margin: 4px 4px 4px 0; border: 0; border-radius: 8px; background: #345; color: #fff; }
+  /* Meditate: the whole screen is the answer pad, dark, so it can be tapped with eyes closed. */
+  #sit { position: fixed; inset: 0; z-index: 10; background: #000; color: #555; padding: 24px;
+         display: flex; flex-direction: column; justify-content: space-between; touch-action: manipulation; user-select: none; }
+  #sit[hidden] { display: none; }
+  #sit p { margin: 0; font-size: 18px; line-height: 1.5; }
+  #sit button { align-self: flex-start; background: #222; color: #777; }
 </style>
 </head>
 <body>
@@ -43,6 +50,12 @@
   <button class="secondary test" data-test="alpha" disabled>Alpha test (4 min)</button>
   <button class="secondary test" data-test="beat" disabled>Beat test (26 min)</button>
   <button class="secondary test" data-test="swap" disabled>Swap test (34 min)</button>
+  <button class="secondary test" data-test="meditate" disabled>Meditate (20 min)</button>
+  <select id="medSound">
+    <option value="">Silence</option>
+    <option value="control">Plain tone</option>
+    <option value="beat">6 Hz binaural beat</option>
+  </select>
 </div>
 <div>
   <button class="secondary marker" data-marker="eyes_open" disabled>Eyes open</button>
@@ -62,6 +75,11 @@
 <div id="recordings">None yet.</div>
 <h3>Log</h3>
 <div id="log"></div>
+<div id="sit" hidden>
+  <button id="sitStop" class="small">Stop</button>
+  <p>At the bell, tap anywhere:<br>1× focused · 2× mind wandering · 3× drowsy</p>
+  <p id="sitClock"></p>
+</div>
 <script>
 'use strict';
 // Muse 2 GATT layout and start sequence, checked against muse-js and muse-lsl.
@@ -165,9 +183,22 @@ const TESTS = {
       { marker: 'silence', s: 60 },
     ],
   },
+  // Eyes closed, with the sound picked next to the button, and thought probes throughout.
+  meditate: {
+    label: 'Meditate (20 min)',
+    steps: [{ marker: 'meditate', s: 1200, beeps: 1, sound: 'picked' }],
+  },
 };
+// Thought probes during Meditate: a soft bell at random moments; tap the screen once if you were
+// focused, twice if your mind had wandered, three times if you were drowsy. The EEG just before each
+// answer shows what those states look like on you. No probe in the first 4 min: in the first two
+// sessions, settling in took about 3.5 min.
+const PROBE_FIRST_S = 240, PROBE_GAP_S = [60, 150];
+const PROBE_WAIT_MS = 10000;  // no tap by then: no answer
+const TAP_GAP_MS = 2000;      // the answer is complete this long after the last tap
+const ANSWERS = ['focused', 'wandering', 'drowsy'];
 const LABELS = {
-  eyes_open: 'Eyes OPEN', eyes_closed: 'Eyes CLOSED', silence: 'Silence',
+  eyes_open: 'Eyes OPEN', eyes_closed: 'Eyes CLOSED', silence: 'Silence', meditate: 'Meditate',
   mono: `MONO: ${BEAT_HZ} Hz wobble`, beat: `BEAT: ${BEAT_HZ} Hz binaural`, control: 'CONTROL: no beat',
   mono2: `MONO 2: ${BEAT2_HZ} Hz wobble`, beat2: `BEAT 2: ${BEAT2_HZ} Hz binaural`,
 };
@@ -189,6 +220,7 @@ let rateAt = 0;
 let audio = null, tones = null;  // tones: { key, gain, oscs } of the sound playing now
 let phase = null, testKey = null, testTimer = null, earTimer = null;
 let warnedAt = null;  // when the last contact chime played; null while no warning is pending
+let probeTimer = null, probe = null;  // probe: { at, firstTap, taps, timer } while a bell awaits its answer
 
 function stamp() {
   const d = new Date(), p = n => String(n).padStart(2, '0');
@@ -500,6 +532,8 @@ function showPhase() {
   }
   $('earCheck').disabled = testKey !== null;
   $('earCheck').textContent = earTimer !== null ? 'Stop ear check' : 'Ear check';
+  $('medSound').disabled = testKey !== null;
+  $('sit').hidden = testKey !== 'meditate';
   if (!phase) {
     $('phase').textContent = '';
     return;
@@ -508,6 +542,44 @@ function showPhase() {
   const s = Math.floor((performance.now() - phase.since) / 1000);
   const of = phase.total ? ` / ${clock(phase.total)}, block ${phase.block}` : '';
   $('phase').textContent = `${phase.label} · ${clock(s)}${of}`;
+  $('sitClock').textContent = `${clock(s)} / ${clock(phase.total ?? 0)}`;
+}
+
+function scheduleProbe(first) {
+  const [lo, hi] = PROBE_GAP_S;
+  probeTimer = setTimeout(askProbe, (first ? PROBE_FIRST_S : lo + Math.random() * (hi - lo)) * 1000);
+}
+
+function askProbe() {
+  chime([1047], 0, 0);
+  logEvent('probe');
+  probe = { at: performance.now(), firstTap: null, taps: 0, timer: setTimeout(answerProbe, PROBE_WAIT_MS) };
+}
+
+function tapProbe() {
+  if (!probe) return;
+  probe.firstTap ??= performance.now();
+  probe.taps++;
+  clearTimeout(probe.timer);
+  probe.timer = setTimeout(answerProbe, TAP_GAP_MS);
+}
+
+// One soft tick per tap counted confirms the answer; more than three taps is logged as unclear.
+function answerProbe() {
+  const { at, firstTap, taps } = probe;
+  probe = null;
+  const answer = taps === 0 ? 'none' : ANSWERS[taps - 1] ?? 'unclear';
+  const rt = firstTap === null ? '' : ` rt_ms=${Math.round(firstTap - at)}`;
+  logEvent(`probe_answer ${answer} taps=${taps}${rt}`);
+  if (taps) chime(Array(Math.min(taps, 4)).fill(1319), 0, 0);
+  scheduleProbe(false);
+}
+
+function stopProbes() {
+  clearTimeout(probeTimer);
+  if (probe) clearTimeout(probe.timer);
+  probeTimer = null;
+  probe = null;
 }
 
 function runTest(key, step = 0) {
@@ -518,11 +590,16 @@ function runTest(key, step = 0) {
     return;
   }
   if (step === 0) stopEarCheck();
-  const { marker, s, beeps = 0, sound = null } = steps[step];
+  const { marker, s, beeps = 0 } = steps[step];
+  const sound = steps[step].sound === 'picked' ? $('medSound').value || null : steps[step].sound ?? null;
   testKey = key;
   if (beeps) beep(beeps);
   testTimer = setTimeout(() => runTest(key, step + 1), s * 1000);
   setPhase(marker, `${step + 1} of ${steps.length}`, s);
+  if (marker === 'meditate') {
+    logEvent(`meditate sound ${sound ?? 'silence'}`);
+    scheduleProbe(true);
+  }
   if (sound !== (tones?.key ?? null)) {
     playSound(sound, FADE_S);
     if (sound) logEvent(`sound ${sound} L${SOUNDS[sound].left.join('+')} R${SOUNDS[sound].right.join('+')}`);
@@ -532,6 +609,7 @@ function runTest(key, step = 0) {
 function stopTest() {
   if (testKey !== null) logEvent('marker test_end');
   clearTimeout(testTimer);
+  stopProbes();
   testKey = null;
   testTimer = null;
   warnedAt = null;
@@ -826,6 +904,8 @@ $('disconnect').onclick = disconnect;
 $('earCheck').onclick = () => earTimer !== null ? stopEarCheck() : earCheck(0);
 for (const b of document.querySelectorAll('.test')) b.onclick = () => testKey !== null ? stopTest() : runTest(b.dataset.test);
 for (const b of document.querySelectorAll('.marker')) b.onclick = () => phase?.marker !== b.dataset.marker && setPhase(b.dataset.marker);
+$('sit').onpointerdown = e => e.target !== $('sitStop') && tapProbe();
+$('sitStop').onclick = stopTest;
 document.addEventListener('visibilitychange', () => {
   if (!device?.gatt.connected) return;
   if (document.visibilityState === 'visible') keepAwake();
